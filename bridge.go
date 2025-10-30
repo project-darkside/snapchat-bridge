@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -178,7 +179,7 @@ func (user *SimpleUser) Reply(roomID id.RoomID, message string) {
 		Body:    message,
 	}
 
-	_, err := user.bridge.Bot.SendMessageEvent(roomID, event.EventMessage, content)
+	_, err := user.bridge.Bot.SendMessageEvent(context.Background(), roomID, event.EventMessage, content)
 	if err != nil {
 		log.Printf("Failed to send reply: %v", err)
 	}
