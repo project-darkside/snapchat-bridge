@@ -1,0 +1,20 @@
+# Snapchat Bridge AppService Registration
+# Register this with your Matrix homeserver
+
+id: snapchat
+url: http://localhost:29318
+as_token: "REPLACE_WITH_APPSERVICE_TOKEN"
+hs_token: "REPLACE_WITH_HOMESERVER_TOKEN"
+sender_localpart: snapchatbot
+
+namespaces:
+  users:
+    - exclusive: true
+      regex: "@snapchat_.+:example.com"
+  aliases:
+    - exclusive: true
+      regex: "#snapchat_.+:example.com"
+
+# For Synapse, add this file to your homeserver.yaml:
+# app_service_config_files:
+#   - /path/to/registration.yaml

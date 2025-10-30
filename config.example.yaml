@@ -1,0 +1,51 @@
+# Snapchat Bridge Configuration
+# Copy this file to config.yaml and customize for your setup
+
+# Matrix homeserver connection
+homeserver:
+  address: https://matrix.example.com
+  domain: example.com
+
+# Application service configuration
+appservice:
+  address: http://localhost:29318
+  hostname: 0.0.0.0
+  port: 29318
+  id: snapchat
+  # Generate these tokens using: openssl rand -base64 64
+  bot_token: "REPLACE_WITH_BOT_TOKEN"
+  hs_token: "REPLACE_WITH_HOMESERVER_TOKEN"
+  as_token: "REPLACE_WITH_APPSERVICE_TOKEN"
+  bot_localpart: snapchatbot
+
+# Bridge configuration
+bridge:
+  username: snapchat
+  displayname_template: "{{.Username}} (Snapchat)"
+  command_prefix: "!sc"
+  max_connection_age: 3600
+  encryption:
+    allow: true
+    default: false
+    require: false
+
+# Database configuration
+database:
+  type: sqlite3
+  uri: snapchat.db
+
+# Logging configuration
+logging:
+  level: info
+  file: ""  # Leave empty to log to stdout
+
+# Snapchat-specific configuration
+snapchat:
+  base_url: https://app.snapchat.com
+  user_agent: "Snapchat/12.51.0.35 (iPhone14,2; iOS 16.6; en_US) #4104006074"
+  device_id: "iPhone14,2"
+  app_version: "12.51.0.35"
+  client_auth: ""  # Auto-generated during auth
+  rate_limit:
+    requests: 30
+    window: 60
