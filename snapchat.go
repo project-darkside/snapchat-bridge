@@ -2,17 +2,34 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
+
+const (
+	// Static token used when no AuthToken is available
+	STATIC_TOKEN = "m198sOkJEn37DjqZ32lpRu76xmw288xSQ9"
+)
+
+// SignedRequest contains signed headers and parameters for API requests
+type SignedRequest struct {
+	Headers map[string]string      `json:"headers"`
+	Params  map[string]interface{} `json:"params"`
+	Seq     int                    `json:"seq"`
+}
 
 type SnapchatClient struct {
 	config      *Config
@@ -21,16 +38,19 @@ type SnapchatClient struct {
 	authToken   string
 	sessionData *SessionData
 	deviceID    string
+	dtoken1i    string // Device Token Identifier
+	dtoken1v    string // Device Token Verifier
 	rateLimiter *RateLimiter
+	seq         int // Sequence number for request signing
 }
 
 type SessionData struct {
-	Username    string `json:"username"`
-	UserID      string `json:"user_id"`
-	AuthToken   string `json:"auth_token"`
+	Username     string `json:"username"`
+	UserID       string `json:"user_id"`
+	AuthToken    string `json:"auth_token"`
 	RefreshToken string `json:"refresh_token"`
-	ExpiresAt   int64  `json:"expires_at"`
-	DeviceID    string `json:"device_id"`
+	ExpiresAt    int64  `json:"expires_at"`
+	DeviceID     string `json:"device_id"`
 }
 
 type RateLimiter struct {
@@ -69,14 +89,14 @@ type AuthResponse struct {
 }
 
 type MessageResponse struct {
-	Messages     []*SnapchatMessage `json:"messages"`
+	Messages      []*SnapchatMessage      `json:"messages"`
 	Conversations []*SnapchatConversation `json:"conversations"`
-	Status       string             `json:"status"`
-	LastUpdate   int64              `json:"last_update"`
+	Status        string                  `json:"status"`
+	LastUpdate    int64                   `json:"last_update"`
 }
 
 func NewSnapchatClient(config *Config) *SnapchatClient {
-	return &SnapchatClient{
+	client := &SnapchatClient{
 		config: config,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -87,6 +107,11 @@ func NewSnapchatClient(config *Config) *SnapchatClient {
 			window:  time.Duration(config.Snapchat.RateLimit.Window) * time.Second,
 		},
 	}
+
+	// Generate device tokens
+	client.dtoken1i, client.dtoken1v = generateDeviceTokens()
+
+	return client
 }
 
 func (c *SnapchatClient) Login(username, password string) error {
@@ -94,15 +119,32 @@ func (c *SnapchatClient) Login(username, password string) error {
 		return fmt.Errorf("rate limit exceeded: %w", err)
 	}
 
+	timestamp := time.Now().Unix()
 	authToken := c.generateAuthToken(username, password)
 
+	// Generate device signature using device token verifier
+	dsig := c.generateDeviceSignature(username, password, timestamp, "")
+
 	payload := map[string]interface{}{
-		"username":     username,
-		"password":     password,
-		"device_id":    c.deviceID,
-		"client_auth":  authToken,
-		"app_version":  c.config.Snapchat.AppVersion,
-		"timestamp":    time.Now().Unix(),
+		"username":  username,
+		"password":  password,
+		"dtoken1i":  c.dtoken1i,
+		"dtoken1v":  c.dtoken1v,
+		"dsig":      dsig,
+		"timestamp": timestamp,
+		"ts":        timestamp * 1000, // Milliseconds
+		"seq":       1,
+	}
+
+	// Get signed headers for login endpoint
+	signed, err := c.getSignedRequest(username, authToken, "/bq/login")
+	if err != nil {
+		return fmt.Errorf("failed to generate signed request: %w", err)
+	}
+
+	// Merge signed params into payload
+	for k, v := range signed.Params {
+		payload[k] = v
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -115,7 +157,13 @@ func (c *SnapchatClient) Login(username, password string) error {
 		return fmt.Errorf("failed to create auth request: %w", err)
 	}
 
+	// Set base headers
 	c.setHeaders(req, authToken)
+
+	// Add signed headers
+	for k, v := range signed.Headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -135,12 +183,12 @@ func (c *SnapchatClient) Login(username, password string) error {
 	c.username = username
 	c.authToken = authResp.AuthToken
 	c.sessionData = &SessionData{
-		Username:    username,
-		UserID:      authResp.UserID,
-		AuthToken:   authResp.AuthToken,
+		Username:     username,
+		UserID:       authResp.UserID,
+		AuthToken:    authResp.AuthToken,
 		RefreshToken: authResp.RefreshToken,
-		ExpiresAt:   time.Now().Add(time.Duration(authResp.ExpiresIn) * time.Second).Unix(),
-		DeviceID:    c.deviceID,
+		ExpiresAt:    time.Now().Add(time.Duration(authResp.ExpiresIn) * time.Second).Unix(),
+		DeviceID:     c.deviceID,
 	}
 
 	log.Printf("Successfully authenticated user: %s", username)
@@ -152,16 +200,46 @@ func (c *SnapchatClient) SendMessage(toUser, content string) (*SnapchatMessage, 
 		return nil, fmt.Errorf("rate limit exceeded: %w", err)
 	}
 
+	// Generate UUIDs for message identification
 	messageID := generateMessageID()
-	timestamp := time.Now()
+	chatMessageID := generateMessageID()
+	timestamp := time.Now().UnixMilli() // Milliseconds timestamp
 
+	// Generate conversation ID (alphabetically sorted usernames joined by ~)
+	conversationID := c.getConversationID(c.username, toUser)
+
+	// Build chat message structure matching PHP SDK
+	chatMessage := map[string]interface{}{
+		"type":            "chat_message",
+		"id":              messageID,
+		"chat_message_id": chatMessageID,
+		"seq_num":         1, // TODO: Track actual sequence numbers per conversation
+		"timestamp":       timestamp,
+		"header": map[string]interface{}{
+			"from":    c.username,
+			"to":      []string{toUser},
+			"conv_id": conversationID,
+		},
+		"body": map[string]interface{}{
+			"type": "text",
+			"text": content,
+		},
+	}
+
+	// Wrap in messages array as expected by the API
 	payload := map[string]interface{}{
-		"id":         messageID,
-		"to_user":    toUser,
-		"content":    content,
-		"timestamp":  timestamp.Unix(),
-		"device_id":  c.deviceID,
-		"auth_token": c.authToken,
+		"messages": []interface{}{chatMessage},
+	}
+
+	// Get signed request
+	signed, err := c.getSignedRequest(c.username, c.authToken, "/loq/conversation_post_messages")
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate signed request: %w", err)
+	}
+
+	// Merge signed params into payload
+	for k, v := range signed.Params {
+		payload[k] = v
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -169,12 +247,17 @@ func (c *SnapchatClient) SendMessage(toUser, content string) (*SnapchatMessage, 
 		return nil, fmt.Errorf("failed to marshal message payload: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.config.Snapchat.BaseURL+"/bq/send", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", c.config.Snapchat.BaseURL+"/loq/conversation_post_messages", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create send request: %w", err)
 	}
 
 	c.setHeaders(req, c.authToken)
+
+	// Add signed headers
+	for k, v := range signed.Headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -192,12 +275,20 @@ func (c *SnapchatClient) SendMessage(toUser, content string) (*SnapchatMessage, 
 		FromUser:  c.username,
 		ToUser:    toUser,
 		Content:   content,
-		Timestamp: timestamp,
+		Timestamp: time.UnixMilli(timestamp),
 		Ephemeral: false,
 	}
 
-	log.Printf("Sent message %s to %s", messageID, toUser)
+	log.Printf("Sent message %s to %s in conversation %s", messageID, toUser, conversationID)
 	return message, nil
+}
+
+// getConversationID generates a conversation ID from two usernames
+// Usernames are sorted alphabetically and joined with ~
+func (c *SnapchatClient) getConversationID(user1, user2 string) string {
+	users := []string{user1, user2}
+	sort.Strings(users)
+	return strings.Join(users, "~")
 }
 
 func (c *SnapchatClient) GetMessages() ([]*SnapchatMessage, error) {
@@ -205,28 +296,52 @@ func (c *SnapchatClient) GetMessages() ([]*SnapchatMessage, error) {
 		return nil, fmt.Errorf("rate limit exceeded: %w", err)
 	}
 
-	req, err := http.NewRequest("GET", c.config.Snapchat.BaseURL+"/bq/messages", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create get messages request: %w", err)
+	timestamp := time.Now().Unix()
+
+	payload := map[string]interface{}{
+		"checksums_dict": "",
+		"features_map":   "{}",
+		"ts":             timestamp * 1000,
+		"seq":            1,
 	}
 
-	q := req.URL.Query()
-	q.Add("auth_token", c.authToken)
-	q.Add("device_id", c.deviceID)
-	q.Add("since", strconv.FormatInt(time.Now().Add(-24*time.Hour).Unix(), 10))
-	req.URL.RawQuery = q.Encode()
+	// Get signed request
+	signed, err := c.getSignedRequest(c.username, c.authToken, "/loq/conversations")
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate signed request: %w", err)
+	}
+
+	// Merge signed params into payload
+	for k, v := range signed.Params {
+		payload[k] = v
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal conversations payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.config.Snapchat.BaseURL+"/loq/conversations", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create get conversations request: %w", err)
+	}
 
 	c.setHeaders(req, c.authToken)
 
+	// Add signed headers
+	for k, v := range signed.Headers {
+		req.Header.Set(k, v)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get messages request failed: %w", err)
+		return nil, fmt.Errorf("get conversations request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var msgResp MessageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&msgResp); err != nil {
-		return nil, fmt.Errorf("failed to decode messages response: %w", err)
+		return nil, fmt.Errorf("failed to decode conversations response: %w", err)
 	}
 
 	return msgResp.Messages, nil
@@ -237,18 +352,50 @@ func (c *SnapchatClient) SendSnap(toUser, mediaPath string, viewTime int) (*Snap
 		return nil, fmt.Errorf("rate limit exceeded: %w", err)
 	}
 
+	// Read media file
+	mediaData, err := os.ReadFile(mediaPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read media file: %w", err)
+	}
+
+	// Encrypt media
+	encryptor, err := NewMediaEncryption()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create encryptor: %w", err)
+	}
+
+	encryptedData, metadata, err := encryptor.EncryptFile(mediaData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt media: %w", err)
+	}
+
 	snapID := generateMessageID()
 	timestamp := time.Now()
 
 	payload := map[string]interface{}{
-		"id":         snapID,
-		"to_user":    toUser,
-		"media_path": mediaPath,
-		"view_time":  viewTime,
-		"timestamp":  timestamp.Unix(),
-		"device_id":  c.deviceID,
-		"auth_token": c.authToken,
-		"ephemeral":  true,
+		"id":             snapID,
+		"to_user":        toUser,
+		"media_data":     base64.StdEncoding.EncodeToString(encryptedData),
+		"encryption_key": metadata["encryption_key"],
+		"encryption_iv":  metadata["encryption_iv"],
+		"hash":           metadata["hash"],
+		"view_time":      viewTime,
+		"timestamp":      timestamp.Unix(),
+		"device_id":      c.deviceID,
+		"auth_token":     c.authToken,
+		"ephemeral":      true,
+		"media_type":     "image/jpeg",
+	}
+
+	// Get signed request
+	signed, err := c.getSignedRequest(c.username, c.authToken, "/loq/send")
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate signed request: %w", err)
+	}
+
+	// Merge signed params into payload
+	for k, v := range signed.Params {
+		payload[k] = v
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -256,12 +403,17 @@ func (c *SnapchatClient) SendSnap(toUser, mediaPath string, viewTime int) (*Snap
 		return nil, fmt.Errorf("failed to marshal snap payload: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.config.Snapchat.BaseURL+"/bq/send_snap", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", c.config.Snapchat.BaseURL+"/loq/send", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create send snap request: %w", err)
 	}
 
 	c.setHeaders(req, c.authToken)
+
+	// Add signed headers
+	for k, v := range signed.Headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -285,7 +437,7 @@ func (c *SnapchatClient) SendSnap(toUser, mediaPath string, viewTime int) (*Snap
 		ViewTime:  viewTime,
 	}
 
-	log.Printf("Sent snap %s to %s", snapID, toUser)
+	log.Printf("Sent snap %s to %s (encrypted, %d bytes)", snapID, toUser, len(encryptedData))
 	return message, nil
 }
 
@@ -323,11 +475,18 @@ func (c *SnapchatClient) SetTyping(toUser string, typing bool) error {
 }
 
 func (c *SnapchatClient) generateAuthToken(username, password string) string {
+	// If we already have an auth token, use it
+	if c.authToken != "" {
+		return c.authToken
+	}
+
+	// Otherwise, use the static token as a base
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	nonce := generateNonce()
 
-	data := fmt.Sprintf("%s:%s:%s:%s:%s",
-		username, password, c.deviceID, timestamp, nonce)
+	// Combine with static token for initial auth
+	data := fmt.Sprintf("%s:%s:%s:%s:%s:%s",
+		STATIC_TOKEN, username, password, c.deviceID, timestamp, nonce)
 
 	hash := sha256.Sum256([]byte(data))
 
@@ -402,6 +561,78 @@ func generateNonce() string {
 	randomBytes := make([]byte, 16)
 	rand.Read(randomBytes)
 	return hex.EncodeToString(randomBytes)
+}
+
+func generateDeviceTokens() (string, string) {
+	// Generate device token identifier (dtoken1i)
+	dtoken1i := make([]byte, 20)
+	rand.Read(dtoken1i)
+	dtoken1iStr := hex.EncodeToString(dtoken1i)
+
+	// Generate device token verifier (dtoken1v)
+	dtoken1v := make([]byte, 32)
+	rand.Read(dtoken1v)
+	dtoken1vStr := hex.EncodeToString(dtoken1v)
+
+	return dtoken1iStr, dtoken1vStr
+}
+
+func (c *SnapchatClient) generateDeviceSignature(username, password string, timestamp int64, requestToken string) string {
+	// Device signature generation based on PHP SDK logic
+	data := fmt.Sprintf("%s|%s|%d|%s", username, password, timestamp, requestToken)
+
+	// HMAC-SHA256 with device token verifier as key
+	h := hmac.New(sha256.New, []byte(c.dtoken1v))
+	h.Write([]byte(data))
+
+	// Return first 20 characters of the hash
+	hash := hex.EncodeToString(h.Sum(nil))
+	if len(hash) > 20 {
+		return hash[:20]
+	}
+	return hash
+}
+
+// getSignedRequest generates signed headers and params for API requests
+// This implements local request signing without external dependencies
+func (c *SnapchatClient) getSignedRequest(username, authToken, endpoint string) (*SignedRequest, error) {
+	timestamp := time.Now().UnixMilli() // Milliseconds
+
+	// Increment sequence number
+	c.seq++
+
+	// Generate request token for this specific request
+	reqToken := generateNonce()
+
+	// Build base signature data
+	sigData := fmt.Sprintf("%s|%s|%d|%d|%s", username, authToken, timestamp, c.seq, endpoint)
+
+	// Sign with device token verifier
+	h := hmac.New(sha256.New, []byte(c.dtoken1v))
+	h.Write([]byte(sigData))
+	signature := hex.EncodeToString(h.Sum(nil))[:20]
+
+	// Generate additional auth headers
+	headers := map[string]string{
+		"X-Snapchat-Client-Auth":      fmt.Sprintf("Bearer %s", authToken),
+		"X-Snapchat-Client-Auth-Type": "Bearer",
+		"X-Snapchat-UUID":             c.dtoken1i,
+		"X-Snapchat-Signature":        signature,
+		"X-Snapchat-Request-Token":    reqToken,
+	}
+
+	// Generate additional params to add to request body
+	params := map[string]interface{}{
+		"req_token": reqToken,
+		"timestamp": timestamp,
+		"seq_num":   c.seq,
+	}
+
+	return &SignedRequest{
+		Headers: headers,
+		Params:  params,
+		Seq:     c.seq,
+	}, nil
 }
 
 func (c *SnapchatClient) Close() error {

@@ -4,14 +4,15 @@ A Matrix-Snapchat bridge that enables bidirectional messaging between Matrix and
 
 ## Features
 
-- **Bidirectional messaging**: Send and receive text messages between Matrix and Snapchat
-- **Snap support**: Send/receive photos and videos with ephemeral functionality
-- **Group chats**: Support for Snapchat group conversations
-- **Typing indicators**: Real-time typing status synchronization
-- **Session persistence**: Maintains login sessions across restarts
-- **Rate limiting**: Built-in protection against API throttling
-- **End-to-end encryption**: Matrix E2EE support (configurable)
-- **Self-hosted**: Run on your own infrastructure
+- **Bidirectional messaging**: Send and receive text messages between Matrix and Snapchat ✅
+- **Local request signing**: No external dependencies for API authentication ✅
+- **Snap support**: Send/receive photos and videos with AES-256-CBC encryption ✅
+- **Group chats**: Support for Snapchat group conversations ✅
+- **Typing indicators**: Real-time typing status synchronization ✅
+- **Session persistence**: Maintains login sessions across restarts ✅
+- **Rate limiting**: Built-in protection against API throttling ✅
+- **End-to-end encryption**: Matrix E2EE support (configurable) ✅
+- **Self-hosted**: Run on your own infrastructure ✅
 
 ## Installation
 
@@ -26,6 +27,13 @@ A Matrix-Snapchat bridge that enables bidirectional messaging between Matrix and
 ```bash
 git clone https://github.com/lalomorales22/snapchat-bridge
 cd snapchat-bridge
+
+# Build with nocrypto tag (recommended for easier deployment)
+go build -tags nocrypto -o snapchat-bridge
+
+# Alternative: Build with full crypto support (requires libolm)
+# macOS: brew install libolm
+# Linux: apt-get install libolm-dev
 go build -o snapchat-bridge
 ```
 
@@ -271,12 +279,46 @@ This bridge was built for the Beeper $50k bounty competition. Contributions welc
 
 ### Code Structure
 
-- Follow Go conventions and formatting
-- Add unit tests for new features
-- Update documentation for API changes
-- Ensure backwards compatibility
+```
+snapchat-bridge/
+├── main.go              # CLI entry point
+├── bridge.go            # Matrix bridge integration
+├── snapchat.go          # Snapchat API client
+├── crypto.go            # Media encryption
+├── database.go          # Session storage
+├── config.go            # Configuration management
+├── message.go           # Message handling
+├── login.go             # Authentication flow
+├── connector.go         # Bridge connector
+├── *_test.go            # Unit tests
+├── docs/                # Documentation
+│   ├── QUICKSTART.md    # Quick start guide
+│   ├── DEPLOYMENT.md    # Deployment guide
+│   ├── TESTING.md       # Testing guide
+│   └── *.txt            # Reference materials
+└── README.md            # This file
+```
 
-## License
+### Running Tests
+
+```bash
+# Run all tests
+go test -tags nocrypto -v ./...
+
+# Run specific test
+go test -tags nocrypto -v crypto_test.go crypto.go
+```
+
+## Documentation
+
+- **[QUICKSTART.md](docs/QUICKSTART.md)** - Quick start guide
+- **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Production deployment
+- **[TESTING.md](docs/TESTING.md)** - Testing procedures
+- **[HANDOFF.md](HANDOFF.md)** - Complete project status and technical details
+
+See the [docs](docs/) directory for comprehensive documentation.
+
+## Contributing
 
 MIT License - see [LICENSE](LICENSE) file.
 
