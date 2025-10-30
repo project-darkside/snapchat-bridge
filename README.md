@@ -472,11 +472,6 @@ MIT License - see [LICENSE](LICENSE) file.
 
 This software is provided for educational and research purposes. Users are responsible for complying with Snapchat's Terms of Service and applicable laws. The developers disclaim any liability for misuse.
 
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/beeper/snapchat-bridge/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/beeper/snapchat-bridge/discussions)
-- **Beeper**: Contact kishan@beeper.com for bounty-related questions
 
 ## Bounty Information
 
