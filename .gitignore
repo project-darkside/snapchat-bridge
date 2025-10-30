@@ -4,20 +4,22 @@
 *.dll
 *.so
 *.dylib
+
+# Compiled bridge binaries
 snapchat-bridge
 mautrix-snapchat
+test_picaboo_login
+test_snap_login
 
 # Test binary, built with `go test -c`
 *.test
 
 # Output of the go coverage tool
 *.out
+*.prof
 
 # Go workspace file
 go.work
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
 
 # Configuration files (keep examples, ignore actual config)
 config.yaml
@@ -43,6 +45,7 @@ logs/
 .vscode/
 .idea/
 *.iml
+.claude/
 
 # macOS
 .DS_Store
@@ -75,3 +78,12 @@ docs/_build/
 # Debug files
 debug
 debug.test
+
+# Development temporary files
+QUICK_START.txt
+COMMIT_MESSAGE.md
+/tmp/
+
+# mitmproxy captures
+*.mitm
+mitmproxy/

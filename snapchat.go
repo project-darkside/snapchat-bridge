@@ -34,6 +34,7 @@ type SignedRequest struct {
 type SnapchatClient struct {
 	config      *Config
 	httpClient  *http.Client
+	picaboo     *PicabooClient // Picaboooo signing service client
 	username    string
 	authToken   string
 	sessionData *SessionData
@@ -86,6 +87,7 @@ type AuthResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 	Status       string `json:"status"`
 	Message      string `json:"message,omitempty"`
+	Logged       bool   `json:"logged"`
 }
 
 type MessageResponse struct {
@@ -101,6 +103,7 @@ func NewSnapchatClient(config *Config) *SnapchatClient {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		picaboo:  NewPicabooClient(), // Initialize Picaboooo client
 		deviceID: generateDeviceID(),
 		rateLimiter: &RateLimiter{
 			maxReqs: config.Snapchat.RateLimit.Requests,
@@ -119,31 +122,22 @@ func (c *SnapchatClient) Login(username, password string) error {
 		return fmt.Errorf("rate limit exceeded: %w", err)
 	}
 
-	timestamp := time.Now().Unix()
-	authToken := c.generateAuthToken(username, password)
+	log.Printf("🔐 Logging in via Picaboooo service...")
 
-	// Generate device signature using device token verifier
-	dsig := c.generateDeviceSignature(username, password, timestamp, "")
-
-	payload := map[string]interface{}{
-		"username":  username,
-		"password":  password,
-		"dtoken1i":  c.dtoken1i,
-		"dtoken1v":  c.dtoken1v,
-		"dsig":      dsig,
-		"timestamp": timestamp,
-		"ts":        timestamp * 1000, // Milliseconds
-		"seq":       1,
-	}
-
-	// Get signed headers for login endpoint
-	signed, err := c.getSignedRequest(username, authToken, "/bq/login")
+	// Get signed request from Picaboooo
+	picabooResp, err := c.picaboo.GetAuthenticatedLogin(username, password, c.dtoken1i, c.dtoken1v)
 	if err != nil {
-		return fmt.Errorf("failed to generate signed request: %w", err)
+		return fmt.Errorf("picaboooo authentication failed: %w", err)
 	}
 
-	// Merge signed params into payload
-	for k, v := range signed.Params {
+	log.Printf("✅ Picaboooo returned signed request")
+	log.Printf("   URL: %s", picabooResp.URL)
+	log.Printf("   Headers: %d", len(picabooResp.Headers))
+	log.Printf("   Params: %d", len(picabooResp.Params))
+
+	// Prepare payload with Picaboooo params
+	payload := make(map[string]interface{})
+	for k, v := range picabooResp.Params {
 		payload[k] = v
 	}
 
@@ -152,18 +146,22 @@ func (c *SnapchatClient) Login(username, password string) error {
 		return fmt.Errorf("failed to marshal auth payload: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.config.Snapchat.BaseURL+"/bq/login", bytes.NewBuffer(jsonData))
+	// Use the URL provided by Picaboooo
+	req, err := http.NewRequest("POST", picabooResp.URL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create auth request: %w", err)
 	}
 
-	// Set base headers
-	c.setHeaders(req, authToken)
-
-	// Add signed headers
-	for k, v := range signed.Headers {
+	// Set headers from Picaboooo
+	for k, v := range picabooResp.Headers {
 		req.Header.Set(k, v)
 	}
+
+	// Also set our base headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	log.Printf("📡 Sending login request to Snapchat...")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -171,13 +169,17 @@ func (c *SnapchatClient) Login(username, password string) error {
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("📥 Response status: %d", resp.StatusCode)
+	log.Printf("📥 Response body: %s", string(bodyBytes))
+
 	var authResp AuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
-		return fmt.Errorf("failed to decode auth response: %w", err)
+	if err := json.Unmarshal(bodyBytes, &authResp); err != nil {
+		return fmt.Errorf("failed to decode auth response: %w (body: %s)", err, string(bodyBytes))
 	}
 
-	if authResp.Status != "success" {
-		return fmt.Errorf("authentication failed: %s", authResp.Message)
+	if authResp.Status != "success" && !authResp.Logged {
+		return fmt.Errorf("authentication failed: %s (status: %s)", authResp.Message, authResp.Status)
 	}
 
 	c.username = username
@@ -191,7 +193,7 @@ func (c *SnapchatClient) Login(username, password string) error {
 		DeviceID:     c.deviceID,
 	}
 
-	log.Printf("Successfully authenticated user: %s", username)
+	log.Printf("✅ Successfully authenticated user: %s", username)
 	return nil
 }
 
