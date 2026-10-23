@@ -1,5 +1,27 @@
 # Testing Guide - Snapchat Bridge
 
+Current Snapchat authentication and message compatibility are not verified.
+The unit tests use local fixtures, not Snapchat's live service. Do not submit
+real credentials to the legacy signing service on the strength of these tests.
+See [current APK findings](development/FINDINGS.md) for the protocol gaps.
+
+### Current Janus Coverage
+
+`janus_test.go` checks minimal password-request bytes against three synthetic
+requests serialized and round-tripped by the installed Android 14.29.0.50 APK.
+It also checks invalid request inputs and response-envelope handling: malformed
+fields, missing success payloads, unknown statuses, and protobuf oneof ordering.
+Run the focused tests with:
+
+```bash
+CGO_ENABLED=1 go test -mod=readonly -tags goolm -race -run '^TestJanus' .
+```
+
+These tests do not cover a complete device prerequisite, accepted session,
+live login, or Snapchat messaging. The new encoder and envelope parser are not
+connected to the legacy login path. Do not use the account login instructions
+below as evidence that the current bridge is ready for credentials.
+
 ## Test Environment Setup
 
 ### 1. Create Test Snapchat Account
@@ -43,7 +65,21 @@ go test -tags nocrypto -v crypto_test.go crypto.go
 ### Run All Tests
 
 ```bash
-go test -tags nocrypto -v ./...
+CGO_ENABLED=1 go test -mod=readonly -tags goolm -v ./...
+```
+
+The `goolm` tag selects mautrix's pure-Go Matrix encryption implementation,
+avoiding the external `libolm` headers. SQLite still needs CGO and a C compiler.
+On Windows without a suitable compiler, run this from the repository root in
+PowerShell with Docker Desktop using Linux containers:
+
+```powershell
+docker run --rm `
+    --mount "type=bind,source=$((Get-Location).Path),target=/src,readonly" `
+    --mount type=volume,source=snapchat-bridge-gomod,target=/go/pkg/mod `
+    --mount type=volume,source=snapchat-bridge-gocache,target=/root/.cache/go-build `
+    --workdir /src --env CGO_ENABLED=1 golang:1.24-bookworm `
+    go test -mod=readonly -tags goolm ./...
 ```
 
 ## Integration Tests

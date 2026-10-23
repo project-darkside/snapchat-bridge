@@ -87,3 +87,5 @@ COMMIT_MESSAGE.md
 # mitmproxy captures
 *.mitm
 mitmproxy/
+
+apk/

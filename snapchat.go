@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -55,6 +56,7 @@ type SessionData struct {
 }
 
 type RateLimiter struct {
+	mutex    sync.Mutex
 	requests []time.Time
 	maxReqs  int
 	window   time.Duration
@@ -122,18 +124,10 @@ func (c *SnapchatClient) Login(username, password string) error {
 		return fmt.Errorf("rate limit exceeded: %w", err)
 	}
 
-	log.Printf("🔐 Logging in via Picaboooo service...")
-
-	// Get signed request from Picaboooo
 	picabooResp, err := c.picaboo.GetAuthenticatedLogin(username, password, c.dtoken1i, c.dtoken1v)
 	if err != nil {
-		return fmt.Errorf("picaboooo authentication failed: %w", err)
+		return fmt.Errorf("legacy signing service authentication failed: %w", err)
 	}
-
-	log.Printf("✅ Picaboooo returned signed request")
-	log.Printf("   URL: %s", picabooResp.URL)
-	log.Printf("   Headers: %d", len(picabooResp.Headers))
-	log.Printf("   Params: %d", len(picabooResp.Params))
 
 	// Prepare payload with Picaboooo params
 	payload := make(map[string]interface{})
@@ -161,25 +155,31 @@ func (c *SnapchatClient) Login(username, password string) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	log.Printf("📡 Sending login request to Snapchat...")
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("auth request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	log.Printf("📥 Response status: %d", resp.StatusCode)
-	log.Printf("📥 Response body: %s", string(bodyBytes))
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("authentication failed with HTTP status %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read auth response: %w", err)
+	}
 
 	var authResp AuthResponse
 	if err := json.Unmarshal(bodyBytes, &authResp); err != nil {
-		return fmt.Errorf("failed to decode auth response: %w (body: %s)", err, string(bodyBytes))
+		return fmt.Errorf("failed to decode auth response: %w", err)
 	}
 
 	if authResp.Status != "success" && !authResp.Logged {
 		return fmt.Errorf("authentication failed: %s (status: %s)", authResp.Message, authResp.Status)
+	}
+	if authResp.AuthToken == "" || authResp.UserID == "" || authResp.ExpiresIn <= 0 {
+		return fmt.Errorf("authentication response contains an incomplete session")
 	}
 
 	c.username = username
@@ -521,20 +521,22 @@ func (c *SnapchatClient) setHeaders(req *http.Request, authToken string) {
 }
 
 func (rl *RateLimiter) Wait() error {
-	now := time.Now()
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
 
-	rl.requests = filterOldRequests(rl.requests, now.Add(-rl.window))
-
-	if len(rl.requests) >= rl.maxReqs {
-		oldestReq := rl.requests[0]
-		waitTime := rl.window - now.Sub(oldestReq)
-		if waitTime > 0 {
-			time.Sleep(waitTime)
-		}
+	if rl.maxReqs <= 0 || rl.window <= 0 {
+		return fmt.Errorf("invalid rate limit: requests and window must be positive")
 	}
 
-	rl.requests = append(rl.requests, now)
-	return nil
+	for {
+		now := time.Now()
+		rl.requests = filterOldRequests(rl.requests, now.Add(-rl.window))
+		if len(rl.requests) < rl.maxReqs {
+			rl.requests = append(rl.requests, now)
+			return nil
+		}
+		time.Sleep(time.Until(rl.requests[0].Add(rl.window)))
+	}
 }
 
 func filterOldRequests(requests []time.Time, cutoff time.Time) []time.Time {

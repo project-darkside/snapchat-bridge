@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,12 +14,12 @@ import (
 func TestSnapchatClient_generateAuthToken(t *testing.T) {
 	config := &Config{
 		Snapchat: struct {
-			BaseURL     string `yaml:"base_url"`
-			UserAgent   string `yaml:"user_agent"`
-			DeviceID    string `yaml:"device_id"`
-			AppVersion  string `yaml:"app_version"`
-			ClientAuth  string `yaml:"client_auth"`
-			RateLimit   struct {
+			BaseURL    string `yaml:"base_url"`
+			UserAgent  string `yaml:"user_agent"`
+			DeviceID   string `yaml:"device_id"`
+			AppVersion string `yaml:"app_version"`
+			ClientAuth string `yaml:"client_auth"`
+			RateLimit  struct {
 				Requests int `yaml:"requests"`
 				Window   int `yaml:"window"`
 			} `yaml:"rate_limit"`
@@ -136,6 +139,69 @@ func TestRateLimiter_Wait(t *testing.T) {
 	}
 }
 
+func TestRateLimiter_RefreshesAfterWait(t *testing.T) {
+	rateLimiter := &RateLimiter{maxReqs: 1, window: 10 * time.Millisecond}
+	if err := rateLimiter.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	firstRequest := rateLimiter.requests[0]
+	if err := rateLimiter.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if len(rateLimiter.requests) != 1 {
+		t.Fatalf("Expected only the newly admitted request, got %d", len(rateLimiter.requests))
+	}
+	if rateLimiter.requests[0].Before(firstRequest.Add(rateLimiter.window)) {
+		t.Error("The admitted request must be timestamped after the wait")
+	}
+}
+
+func TestRateLimiter_InvalidLimits(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		maxReqs int
+		window  time.Duration
+	}{
+		{name: "zero requests", maxReqs: 0, window: time.Second},
+		{name: "negative requests", maxReqs: -1, window: time.Second},
+		{name: "zero window", maxReqs: 1, window: 0},
+		{name: "negative window", maxReqs: 1, window: -time.Second},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			rateLimiter := &RateLimiter{maxReqs: testCase.maxReqs, window: testCase.window}
+			if err := rateLimiter.Wait(); err == nil {
+				t.Error("Invalid limits must return an error")
+			}
+		})
+	}
+}
+
+func TestRateLimiter_ConcurrentRequests(t *testing.T) {
+	const requestCount = 6
+	rateLimiter := &RateLimiter{maxReqs: 1, window: 5 * time.Millisecond}
+	start := make(chan struct{})
+	results := make(chan error, requestCount)
+	for range requestCount {
+		go func() {
+			<-start
+			results <- rateLimiter.Wait()
+		}()
+	}
+	startedAt := time.Now()
+	close(start)
+	for range requestCount {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if time.Since(startedAt) < time.Duration(requestCount-1)*rateLimiter.window {
+		t.Error("Concurrent requests exceeded the configured admission rate")
+	}
+	if len(rateLimiter.requests) > rateLimiter.maxReqs {
+		t.Error("The active request window exceeds the configured capacity")
+	}
+}
+
 func TestSnapchatClient_Login_MockServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/bq/login" && r.Method == "POST" {
@@ -156,12 +222,12 @@ func TestSnapchatClient_Login_MockServer(t *testing.T) {
 
 	config := &Config{
 		Snapchat: struct {
-			BaseURL     string `yaml:"base_url"`
-			UserAgent   string `yaml:"user_agent"`
-			DeviceID    string `yaml:"device_id"`
-			AppVersion  string `yaml:"app_version"`
-			ClientAuth  string `yaml:"client_auth"`
-			RateLimit   struct {
+			BaseURL    string `yaml:"base_url"`
+			UserAgent  string `yaml:"user_agent"`
+			DeviceID   string `yaml:"device_id"`
+			AppVersion string `yaml:"app_version"`
+			ClientAuth string `yaml:"client_auth"`
+			RateLimit  struct {
 				Requests int `yaml:"requests"`
 				Window   int `yaml:"window"`
 			} `yaml:"rate_limit"`
@@ -180,10 +246,12 @@ func TestSnapchatClient_Login_MockServer(t *testing.T) {
 	}
 
 	client := NewSnapchatClient(config)
+	signer := newMockLoginSigner(t, server.URL+"/bq/login")
+	client.picaboo.baseURL = signer.URL + "/"
 	err := client.Login("testuser", "testpass")
 
 	if err != nil {
-		t.Errorf("Login should succeed with mock server: %v", err)
+		t.Fatalf("Login should succeed with mock server: %v", err)
 	}
 
 	if client.username != "testuser" {
@@ -210,12 +278,12 @@ func TestSnapchatClient_Login_Failure(t *testing.T) {
 
 	config := &Config{
 		Snapchat: struct {
-			BaseURL     string `yaml:"base_url"`
-			UserAgent   string `yaml:"user_agent"`
-			DeviceID    string `yaml:"device_id"`
-			AppVersion  string `yaml:"app_version"`
-			ClientAuth  string `yaml:"client_auth"`
-			RateLimit   struct {
+			BaseURL    string `yaml:"base_url"`
+			UserAgent  string `yaml:"user_agent"`
+			DeviceID   string `yaml:"device_id"`
+			AppVersion string `yaml:"app_version"`
+			ClientAuth string `yaml:"client_auth"`
+			RateLimit  struct {
 				Requests int `yaml:"requests"`
 				Window   int `yaml:"window"`
 			} `yaml:"rate_limit"`
@@ -234,10 +302,12 @@ func TestSnapchatClient_Login_Failure(t *testing.T) {
 	}
 
 	client := NewSnapchatClient(config)
+	signer := newMockLoginSigner(t, server.URL+"/bq/login")
+	client.picaboo.baseURL = signer.URL + "/"
 	err := client.Login("wronguser", "wrongpass")
 
 	if err == nil {
-		t.Error("Login should fail with invalid credentials")
+		t.Fatal("Login should fail with invalid credentials")
 	}
 
 	if !strings.Contains(err.Error(), "Invalid credentials") {
@@ -245,9 +315,85 @@ func TestSnapchatClient_Login_Failure(t *testing.T) {
 	}
 }
 
+func TestSnapchatClient_Login_RejectsInvalidResponses(t *testing.T) {
+	const sensitiveBody = "response-body-secret"
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		want      string
+		truncated bool
+	}{
+		{"http failure", http.StatusUnauthorized, `{"status":"success","auth_token":"response-body-secret","user_id":"user","expires_in":3600}`, "HTTP status 401", false},
+		{"invalid json", http.StatusOK, sensitiveBody, "failed to decode auth response", false},
+		{"read failure", http.StatusOK, sensitiveBody, "failed to read auth response", true},
+		{"missing token", http.StatusOK, `{"status":"success","user_id":"user","expires_in":3600}`, "incomplete session", false},
+		{"missing user", http.StatusOK, `{"status":"success","auth_token":"response-body-secret","expires_in":3600}`, "incomplete session", false},
+		{"missing expiry", http.StatusOK, `{"logged":true,"auth_token":"response-body-secret","user_id":"user"}`, "incomplete session", false},
+		{"negative expiry", http.StatusOK, `{"status":"success","auth_token":"response-body-secret","user_id":"user","expires_in":-1}`, "incomplete session", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if test.truncated {
+					w.Header().Set("Content-Length", "1024")
+				}
+				w.WriteHeader(test.status)
+				w.Write([]byte(test.body))
+			}))
+			t.Cleanup(server.Close)
+			config := &Config{}
+			config.Snapchat.RateLimit.Requests = 30
+			config.Snapchat.RateLimit.Window = 60
+			client := NewSnapchatClient(config)
+			signer := newMockLoginSigner(t, server.URL)
+			client.picaboo.baseURL = signer.URL + "/"
+			var logs bytes.Buffer
+			previousOutput := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousOutput) })
+
+			err := client.Login("testuser", "testpass")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Expected %q error, got %v", test.want, err)
+			}
+			if client.sessionData != nil || client.authToken != "" || client.username != "" {
+				t.Fatal("Invalid response must not establish a session")
+			}
+			if strings.Contains(err.Error(), sensitiveBody) || strings.Contains(logs.String(), sensitiveBody) {
+				t.Fatal("Authentication response body was exposed in an error or log")
+			}
+		})
+	}
+}
+
+func newMockLoginSigner(t *testing.T, targetURL string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/login" {
+			http.NotFound(w, r)
+			return
+		}
+		var request PicabooLoginRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("Invalid signer request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PicabooResponse{
+			Seq:    request.Seq,
+			URL:    targetURL,
+			Params: map[string]interface{}{"username": request.Username, "password": request.Password},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
 func TestSnapchatClient_SendMessage_MockServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/bq/send" && r.Method == "POST" {
+		if r.URL.Path == "/loq/conversation_post_messages" && r.Method == "POST" {
 			w.WriteHeader(http.StatusOK)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
@@ -257,12 +403,12 @@ func TestSnapchatClient_SendMessage_MockServer(t *testing.T) {
 
 	config := &Config{
 		Snapchat: struct {
-			BaseURL     string `yaml:"base_url"`
-			UserAgent   string `yaml:"user_agent"`
-			DeviceID    string `yaml:"device_id"`
-			AppVersion  string `yaml:"app_version"`
-			ClientAuth  string `yaml:"client_auth"`
-			RateLimit   struct {
+			BaseURL    string `yaml:"base_url"`
+			UserAgent  string `yaml:"user_agent"`
+			DeviceID   string `yaml:"device_id"`
+			AppVersion string `yaml:"app_version"`
+			ClientAuth string `yaml:"client_auth"`
+			RateLimit  struct {
 				Requests int `yaml:"requests"`
 				Window   int `yaml:"window"`
 			} `yaml:"rate_limit"`
@@ -287,11 +433,11 @@ func TestSnapchatClient_SendMessage_MockServer(t *testing.T) {
 	message, err := client.SendMessage("recipient", "Hello World!")
 
 	if err != nil {
-		t.Errorf("SendMessage should succeed: %v", err)
+		t.Fatalf("SendMessage should succeed: %v", err)
 	}
 
 	if message == nil {
-		t.Error("Message should not be nil")
+		t.Fatal("Message should not be nil")
 	}
 
 	if message.Content != "Hello World!" {
@@ -312,7 +458,7 @@ func TestFilterOldRequests(t *testing.T) {
 	cutoff := now.Add(-time.Hour)
 
 	requests := []time.Time{
-		now.Add(-2 * time.Hour), // Too old
+		now.Add(-2 * time.Hour),    // Too old
 		now.Add(-30 * time.Minute), // Keep
 		now.Add(-10 * time.Minute), // Keep
 	}
