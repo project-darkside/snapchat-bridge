@@ -160,6 +160,28 @@ Response `o070`: field 1 = application status (1 = success), fields 2-13 =
 status-specific oneof payload, field 14 = optional bytes. Status 1 payload is
 `h18` → `b841` → `ffu0` → repeated `ivs0` scoped tokens.
 
+### Native attestation request (`afx`)
+
+The attestation boundary is `yblj.prh.a([B)[B]` in `libscplugin.so`; its input
+is the serialized `afx` request (`ydx` in the 14.30.0.39 APK). The wire format
+is implemented in [`internal/janus/attestation.go`](../../internal/janus/attestation.go):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| 1 | string | RPC path |
+| 2 | string | (unknown) |
+| 3 | varint | attestation type (`1` = LOGIN) |
+| 4 | message `fg3` | metadata |
+| 5 / 6 | bytes | (unknown) |
+| 7 | varint | (unknown) |
+
+`fg3` is `repeated kte` (field 1) plus varints (fields 2-5); `kte` is repeated
+strings (fields 1-2) plus varints (fields 3-4). The `CommandAttestor` interface
+is the Option-A oracle plumbing: it feeds the serialized `afx` to a command
+(an on-device `prh.a` helper via `adb`) and returns the blob as stdout. The
+field *values* the APK's builder fills in (path variant, metadata, extra
+strings) are not yet recovered.
+
 Provenance: [PASSWORD_LOGIN_FLOW.md](../../docs/development/PASSWORD_LOGIN_FLOW.md)
 and [FINDINGS.md](../../docs/development/FINDINGS.md). The minimal
 identifier/password fixtures match the APK `MessageNano` output byte-for-byte
