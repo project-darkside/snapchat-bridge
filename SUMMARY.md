@@ -1,6 +1,6 @@
 # Snapchat Bridge Progress Summary
 
-Updated: 2026-10-23
+Updated: 2026-10-24
 
 ## Current Status
 
@@ -16,6 +16,72 @@ of the completion percentages in the historical
 The [REA login/session report](docs/development/PASSWORD_LOGIN_FLOW.md) explains
 the native attestation boundary, Fidelius initialization, challenge dispatch,
 and token persistence with method-level evidence and remaining unknowns.
+
+## Static recovery — 2026-10-24 (fs60 assembly chain)
+
+Path-2 (no-root) work this session recovered the full `fs60`/`n070` assembly
+chain from the installed 14.29.0.50 build and verified the on-device oracle on
+the Pixel 5 (same build, `versionName=14.29.0.50`, versionCode 322522).
+
+- `su60` (`BuildLoginHeaderParams`) ctor is
+  `(String instanceUuid, List sequenceIds, int[] flags, byte[] clientAttestation,
+  String cloudAccountId, rxf0 deviceTokenId)`.
+- `vd50.r` (RxJava `Function6`, `this.a==2`) zips six sources into `su60`;
+  `vd50.r`'s default case builds `ndw0` instead (a non-login shape).
+- `xu60.a` assembles the six-way zip: `tc41.b()` (instanceUuid), the integrity
+  single, the COF sequence-id single, the attestation single (`qb00` →
+  `prh.a`), `d(eg8)` (cloud account), and `vu60` (`rxf0.b(rz4.g())`, device
+  token).
+- `eq60` maps `su60` → `fs60` (`eq60.apply` case 2). Its login ctor is
+  `(x420, nr60, xu60, String, String, String)`; the three strings are NOT
+  fixed literals — they are `nr60.a`, `nr60.b`, and the third string argument
+  to `xu60.a`.
+- `eq60.apply` case 0 is the reverse map: `fs60` → `rz2` (the intermediate
+  DTO), confirming `fs60.o0`/`r0`/`n0` feed `rz2.X`/`Y`/`Z`.
+- The login variant `xq60.o` (`x420.VERIFY_ODLV_PATH`) calls `xu60.a` with the
+  third metadata string set to `cv21.a().toString()` — a fresh per-request
+  UUID, not a constant. `nr60` is created by `v3h0.a()`:
+  `new nr60(cz60.b, cz60.d, yv60.b(), yv60.v)` (fallback
+  `BuildConfig.APPLIVERY_SECRET` for `nr60.d`).
+
+### fs60 field map (re-verified against fs60.writeTo)
+
+| field | name | type | source |
+| --- | --- | --- | --- |
+| 1 | b | string | `rod.b()` device identifier |
+| 2 | c | string | `nr60.a` |
+| 3 | t | string | `nr60.b` |
+| 4 | I | string | `nr60.d` login attempt id (fallback `BuildConfig.APPLIVERY_SECRET`) |
+| 5 | X | string | third metadata string (`xu60.a` argument) |
+| 6 | Y | string | `su60.a` instance uuid |
+| 7 | Z | wgg0 | `su60.c` flags (COF sequence ids, repeated int32 field 1) |
+| 8 | m0 | string | `su60.e` cloud account id |
+| 10 | n0 | q8p | `rxf0.j()` device token id (string field 1), omitted when null |
+| 11 | o0 | bytes | `su60.d` client attestation |
+| 12 | p0 | string | (unused in login) |
+| 13 | q0 | string | (unused in login) |
+| 14 | r0 | bytes[] | `su60.b` sequence ids (serialized messages) |
+
+`wgg0` = repeated int32 field 1 (unpacked). `q8p` = string field 1. Both are
+now modeled and tested in [messages.go](internal/janus/messages.go) (`Wgg0`,
+`Q8P`, `NewLoginPrerequisites`) with
+[prerequisites_test.go](internal/janus/prerequisites_test.go).
+
+### Still unknown (literal runtime values)
+
+- `rod.b()` concrete implementation (device-identifier provider) — the one
+  stable device-bound value left.
+- `cz60.b` / `cz60.d` (`nr60.a` / `nr60.b`) and `yv60.v` (`nr60.d`) — app
+  private-data / DI-layer values.
+- Fresh-login defaults for flags / cloud account / device token / sequence ids
+  (expected empty or null on first login). The third metadata string and
+  per-request ids are fresh UUIDs and can be generated client-side.
+
+### Verified this session
+
+- `go test ./internal/janus/` and `go vet ./internal/janus/` pass.
+- `TestAdbAttestorLiveProbe` minted a 4227-byte attestation blob on the Pixel 5
+  via the no-root `app_process64` oracle (Go `AdbAttestor` → `prh.a`).
 
 ## Handoff Snapshot — 2026-10-23
 
@@ -142,33 +208,150 @@ probe zips, `attestation-input/output.bin`, ~60 REA records) and
 
 [`internal/janus/attestation.go`](internal/janus/attestation.go) now implements
 the recovered `afx` request wire format (`ydx`/`fg3`/`kte` in the 14.30.0.39
-APK) plus an `Attestor` interface and `CommandAttestor` oracle plumbing. Three
-routes remain, in time-to-working-login order:
+APK) plus an `Attestor` interface, `CommandAttestor` (stdin/stdout oracle
+plumbing) and `AdbAttestor` (file-staged on-device oracle). Remaining routes,
+in time-to-working-login order:
 
-1. **A — device oracle:** a small on-device helper (reusing the `app_process64`
-   probe technique) loads `libscplugin.so`, calls `prh.a(afx)`, and returns the
-   blob over `adb`; `CommandAttestor` consumes it. Validate server acceptance
-   end-to-end before building further.
+1. **A — device oracle (built, verified 2026-10-23).** An on-device
+   `app_process64` helper (`AttestationOracle`, reflection-only, no android.jar
+   needed to compile) loads `libscplugin.so`, calls `yblj.prh.a(afx)`, and
+   returns the blob. A full LOGIN afx (835 bytes: field 2 = path, field 3 = 1,
+   field 4 = fg3, field 5 = empty) minted a fresh 4.5 KB blob whose SHA-256
+   differs from the minimal-afx output, proving the recovered fg3 metadata is
+   incorporated. `AdbAttestor` drives it (file staging, since adb shell does
+   not reliably forward binary stdin to app_process64). The CLI already accepts
+   the blob via `--attestation-file`. **Still open: send a full login request
+   and confirm server acceptance** (blocked on the Fidelius/COF fields below).
 2. **C — instrument `prh.a`:** interpose libc (`getrandom`, `clock_gettime`,
    file reads) around `prh.a` to learn the exact entropy/key inputs; feeds B.
 3. **B — reimplement in Go:** Ghidra-headless decompile of `prh.a` + callees in
    the Linux Docker environment; drop the phone dependency.
 
-The `afx` builder *field values* (path variant, `fg3` metadata, extra strings)
-are still unknown; recover them from the APK caller of `ydx`'s setters before
-A or B can mint a server-accepted blob.
+### Recovered afx builder field values (14.30.0.39 APK)
+
+Recovered 2026-10-23 from the `ydx` callers. `ydx` is the `afx` request; its
+setters are `e(String)`→field 1, `d(String)`→field 2, `g(int)`→field 3, direct
+`I`→field 4, `a(byte[])`→field 5, `c(byte[])`→field 6, direct `Z`→field 7. The
+native boundary on the Java side is `fl.c.h(byte[])` (14.30.0.39; the installed
+14.29.0.50 equivalent is `yblj.prh.a(byte[])`).
+
+- **Builder** `n6o0` ("SCArgosServiceImpl"). `c(path)` is the LOGIN helper and
+  calls `b(path, 1, null, new byte[0], null)`, so a LOGIN afx is exactly:
+  field 2 = request path, field 3 = 1, field 4 = `fg3` metadata, field 5 =
+  empty byte[] (presence bit set), fields 1/6/7 absent.
+- **Endpoint classification** `nji0`: exact `/loq/register_v2` and prefix
+  `/snapchat.janus.api/RegistrationService/` → type 2 (REGISTER); prefix
+  `/snapchat.janus.api.LoginService/` → type 1 (LOGIN); otherwise type 0
+  (ARGOS). `kld` (`ClientAttestationInterceptor`) attaches the result as HTTP
+  header `x-snapchat-att` = Base64 of `n6o0.b(...)`.
+- **`fg3` metadata** (`dc81.q`, when Argos enabled): three hardcoded `kte`
+  entries — (1) b = `/boosts-prod/`, `/readreceipt-indexer/`,
+  `/streaming-collector/`, `/suggest_friend_`,
+  `/snapchat.friending.server.FriendAction/`,
+  `/snapchat.telephony.api.PhoneEnrollmentService/`; c = `/events_batch`,
+  `/snapchat.friending.server.ContactBook/FullSyncContactBookUpload`; t=5;
+  I=true. (2) b = `/messagingcoreservice.MessagingCoreService/`; t=1; I=false.
+  (3) music: b = the four ig3.e music service paths, c = the thirteen ig3.f
+  music method names; t=5; I=true. A fourth `kte` (b = the
+  `ARGOS_SUPPORTED_ENDPOINTS_PREFIXES` value split on `,`, t=5) is appended when
+  that config is non-empty. `fg3` booleans/long come from the
+  `ARGOS_CONFIGURATION` bytes (default empty); when Argos is disabled `fg3` is
+  empty.
+- **Wire-format fix**: `fg3` fields 2/3/5 and `kte` field 4 are booleans (not
+  int32). [`attestation.go`](internal/janus/attestation.go) now models
+  MessageNano presence bits and exports `NewLoginAfxRequest(path)` with the
+  recovered constants.
+
+### Recovered c3e (COF metadata, n070 field 8) and v0u (Fidelius init, field 7)
+
+Recovered 2026-10-23 from the installed 14.29.0.50 APK.
+
+**c3e** is built by `xq60.a` from `mr60` = `LoginConfigs(cofSyncMetadata=b3e,
+cofRoutingTag=String)`:
+
+| c3e field | setter | value |
+| --- | --- | --- |
+| 1 | `e(String)` | cofRoutingTag |
+| 2 | `c(String)` | cofSyncMetadata.etag (`b3e.a`) |
+| 3 | `d()` | fixed constant **385** |
+| 4 | `a(byte[])` | cofSyncMetadata.bitmap (`b3e.b`, byte[]) |
+
+[`messages.go`](internal/janus/messages.go) previously had field 1/2 swapped and
+treated field 3 as the bitmap; that is now corrected, with
+`NewCOFMetadata(routingTag, etag, bitmap)` encoding the fixed 385. The
+etag/bitmap/routing-tag values come from the COF config store (`jjd`, private
+app data) — runtime values still needed from the device.
+
+**v0u** is assembled by `vo3.apply` case 28 exactly as already encoded in
+[`messages.go`](internal/janus/messages.go): field 1 = base64-decoded device
+user ids (`n1u.h()`), field 2 = `k5u`, field 3 = Android ID bytes (`n1u.e()`).
+`k5u`: field 1 = `r241.f()[26:91)` (65-byte uncompressed P-256 point),
+field 2 = `r241.c()`, field 3 = `r241.e()` (iwek/master key), field 4 =
+`r241.i()` (version).
+
+**Key-material source (the blocker).** `fs91.a` unwraps the private scalar from
+the device blockstore: HKDF(label = stored hashed-public-key + "key"/"nonce",
+keyed by the master key) → AES-GCM decrypt of the stored wrapped scalar → an
+EC `PrivateKey` over `lbr.d` (P-256). It returns
+`r241(iwek=master key, in_beta=PKCS8 EC private key, out_beta=SPKI public,
+version)`. The master key and the wrapped blockstore entry live in the app's
+private data (`/data/data/com.snapchat.android/...`), so producing a real `v0u`
+needs either root access to that storage or the equivalent key material.
+The Android ID (`v0u` field 3) is obtainable without root via
+`adb shell settings get secure android_id`, and its exact byte encoding is now
+known (`lwf` case 1 → `xs91`): hex-decode the 16-char string to 8 bytes
+(`xs91.a`, left-padding with `0` via `xs91.c` if shorter), then prepend a
+single `0x07` byte (`xs91.d`) — **9 bytes total**. The device-specific value
+is read from the attached device and is not committed.
+
+### Recovered fs60 (prerequisites, n070 field 15) — the real blocker
+
+Recovered 2026-10-24. The Go `PasswordRequest`/`n070` field map was re-verified
+against the actual `n070.writeTo` (14.29.0.50) and is **correct**: 1/2/3 =
+identifier oneof, 4 = password, 5 = attempts, 7 = `v0u`, 8 = `c3e`, 9 =
+password source, 11 = WhatsApp bool, 15 = `fs60`.
+
+The reason a login still returns `InvalidArgument/invalidRequest` is that
+**`fs60` is not just field 11 (attestation)**. `fs60` has 14 fields, and
+`eq60` (the login request mapper) populates most of them:
+
+| fs60 field | source | meaning |
+| --- | --- | --- |
+| 1 | `rod.b()` | device/app identifier (provider-backed) |
+| 2-3, 5 | `eq60` ctor strings | request metadata |
+| 4 | `nr60.d` | loginAttemptId (per-request UUID) |
+| 6 | `su60.a` | instanceUuid (per-request UUID) |
+| 7 | `wgg0.a` = `su60.c` | int[] feature/session flags |
+| 8 | `su60.e` | cloudAccountId |
+| 10 | `q8p.b` = `su60.f.j()` | deviceTokenId |
+| 11 | `su60.d` | clientAttestation (the native `prh.a` blob) |
+| 14 | `su60.b` | sequenceIds (repeated serialized messages) |
+
+`su60` is literally named `BuildLoginHeaderParams(instanceUuid, sequenceIds,
+int[], clientAttestation, cloudAccountId, deviceTokenId)`. `rz2` is the
+intermediate login DTO the mapper assembles before it is converted to `n070`:
+field 1 = `mz2` (identifier), field 2 = `lz2` (`c3e` + `v0u`), field 3 =
+`hs60` (password oneof), 4/5/6 = bytes/repeated bytes, 7 = `q8p`, 8 = string,
+9 = bool, 10 = `qhs0`.
+
+Most fs60 values are per-request runtime values (UUIDs, COF sequence ids,
+feature flags) plus the COF/Fidelius key material. A synthetic probe (fresh
+P-256 key + HMAC-SHA256(iwek, SPKI) + empty device-user-ids + empty COF + real
+attestation blob) over Tor still returned the generic `invalidRequest`, as
+expected with an incomplete fs60. The definitive capture is to root the device
+and Frida-hook `n070.writeTo`/`eq60.apply` for a real login, or extract the
+stored key material + COF config.
 
 ## Next Steps
 
-1. **Recover the `afx` builder field values.** Find the APK caller of `ydx`'s
-   setters (`e`/`d`/`g` + the `fg3`/`kte` population) to learn the exact path
-   string, `fg3` metadata, and extra strings. This unblocks both the oracle and
-   the Go reimplementation.
-2. **Build the device attestation oracle (Option A).** Extend the
-   `app_process64` probe into a helper that loads `libscplugin.so`, calls
-   `prh.a(afx)`, and returns the blob (file or socket); drive it from
-   `CommandAttestor`. Then send a full login request and check server
-   acceptance of the minted blob.
+1. ~~**Recover the `afx` builder field values.**~~ Done 2026-10-23 (see
+   "Recovered afx builder field values" above). `NewLoginAfxRequest(path)` in
+   [`attestation.go`](internal/janus/attestation.go) encodes the full LOGIN afx.
+2. ~~**Build the device attestation oracle (Option A).**~~ Done 2026-10-23:
+   on-device `AttestationOracle` helper + [`adb_attestor.go`](internal/janus/adb_attestor.go)
+   (`AdbAttestor`) verified against the Pixel 8. Remaining: send a full login
+   request (with Fidelius `v0u` and COF `c3e`) and confirm the server accepts
+   the minted blob.
 3. **Instrument `prh.a` (Option C).** Interpose libc (`getrandom`,
    `clock_gettime`, file reads) around `prh.a` to learn the exact entropy/key
    inputs feeding the signature.
@@ -182,10 +365,13 @@ A or B can mint a server-accepted blob.
    unverified. `p241.b(byte[])` parses existing keys; it does not generate them.
    The inspected `oz4.call` branch processes successful-login key material; it
    does not establish how fresh login keys are generated.
-6. **Complete the request prerequisites.** Follow `xu60.a` and the `fs60`
-   builder, including original native-provider inputs. Minimal isolated native
-   output is not proof of a complete or server-accepted prerequisite. Verify
-   the `c3e` setters before encoding the COF metadata from `mr60` / `b3e`.
+6. **Complete the request prerequisites (`fs60`).** Now that the full 14-field
+   map is known (see above), recover each value: `rod.b()`, the `eq60` string
+   params, `nr60.d` (loginAttemptId), `su60.a` (instanceUuid), `wgg0.a` (int[]
+   flags), `su60.e` (cloudAccountId), `su60.f.j()` (deviceTokenId), and
+   `su60.b` (sequenceIds). Root + Frida on the Pixel 5 is the surest way to
+   capture the real values plus `v0u`/`c3e` for a live login; alternatively
+   recover `rod`/`su60` builders and the `rz2`→`n070` converter statically.
 7. **Decode usable sessions and challenges.** Follow `o070` success field 2
    (`h18`) through `rz4.c`, token storage, and Fidelius processing. Verify token
    scopes, expiry units, refresh rules, retries, and challenge continuations.

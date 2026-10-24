@@ -50,6 +50,9 @@ type spec struct {
 
 	// Structured Fidelius key material, assembled exactly as vo3.apply case 28.
 	Fidelius *fideliusSpec `json:"fidelius,omitempty"`
+
+	// Structured COF metadata, assembled exactly as xq60.a (c3e).
+	COF *cofSpec `json:"cof,omitempty"`
 }
 
 type fideliusSpec struct {
@@ -59,6 +62,14 @@ type fideliusSpec struct {
 	R241C string   `json:"r241_c,omitempty"` // k5u field 2
 	R241E string   `json:"r241_e,omitempty"` // k5u field 3
 	R241I int64    `json:"r241_i,omitempty"` // k5u field 4
+}
+
+// cofSpec mirrors c3e: field 1 routing tag, field 2 etag, field 3 is the fixed
+// 385, field 4 bitmap. Empty routing-tag/etag still set their presence bits.
+type cofSpec struct {
+	RoutingTag string `json:"routing_tag,omitempty"`
+	ETag       string `json:"etag,omitempty"`
+	Bitmap     string `json:"bitmap,omitempty"` // hex or base64
 }
 
 func main() {
@@ -274,6 +285,16 @@ func buildRequest(username, email, phone, password, passFile, specFile *string,
 				return nil, fmt.Errorf("cof_metadata: %w", err)
 			}
 			request.COFMetadata = bytes
+		} else if loaded.COF != nil {
+			bitmap, err := decodeBytes(loaded.COF.Bitmap)
+			if err != nil {
+				return nil, fmt.Errorf("cof.bitmap: %w", err)
+			}
+			cof, err := janus.NewCOFMetadata(loaded.COF.RoutingTag, loaded.COF.ETag, bitmap).Marshal()
+			if err != nil {
+				return nil, fmt.Errorf("cof: %w", err)
+			}
+			request.COFMetadata = cof
 		}
 		if loaded.Prerequisites != "" {
 			bytes, err := decodeBytes(loaded.Prerequisites)

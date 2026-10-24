@@ -58,7 +58,7 @@ func TestPasswordRequestMarshalFullFields(t *testing.T) {
 		Password:       "p",
 		NumAttempts:    int64Ptr(1),
 		FideliusInit:   mustDecode(t, "0a01aa"),
-		COFMetadata:    mustDecode(t, "1805"),
+		COFMetadata:    mustDecode(t, "188103"),
 		PasswordSource: int32Ptr(2),
 		WhatsApp:       boolPtr(true),
 		Prerequisites:  mustDecode(t, "5a020102"),
@@ -67,7 +67,7 @@ func TestPasswordRequestMarshalFullFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "0a017522017028013a030a01aa42021805480258017a045a020102"
+	want := "0a017522017028013a030a01aa4203188103480258017a045a020102"
 	if hex.EncodeToString(got) != want {
 		t.Errorf("request = %x, want %s", got, want)
 	}
@@ -109,12 +109,14 @@ func TestFideliusInitMarshal(t *testing.T) {
 }
 
 func TestCOFMetadataMarshal(t *testing.T) {
-	message := &COFMetadata{ETag: stringPtr("e"), RoutingTag: stringPtr("r"), Bitmap: int32Ptr(5), Bytes: []byte{0xcc}}
+	message := NewCOFMetadata("r", "e", []byte{0xcc})
 	got, err := message.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "0a016512017218052201cc"
+	// field 1 = routing tag "r", field 2 = etag "e", field 3 = 385
+	// (0x81 0x03), field 4 = bitmap cc.
+	want := "0a01721201651881032201cc"
 	if hex.EncodeToString(got) != want {
 		t.Errorf("cof metadata = %x, want %s", got, want)
 	}
@@ -129,6 +131,30 @@ func TestPrerequisitesMarshal(t *testing.T) {
 	want := "0a01785a02dead"
 	if hex.EncodeToString(got) != want {
 		t.Errorf("prerequisites = %x, want %s", got, want)
+	}
+}
+
+// TestPrerequisitesFullMarshal locks in the complete fs60 field map recovered
+// from the 14.29.0.50 APK: fields 1-8 strings/wgg0, 10 q8p, 11 bytes, 12-13
+// strings, 14 repeated bytes. fs60 has no field 9 or 15.
+func TestPrerequisitesFullMarshal(t *testing.T) {
+	message := &Prerequisites{
+		S1: stringPtr("a"), S2: stringPtr("b"), S3: stringPtr("c"),
+		S4: stringPtr("d"), S5: stringPtr("e"), S6: stringPtr("f"),
+		Field7:  []byte{0x08, 0x01, 0x08, 0x02},       // wgg0{a:[1,2]}
+		S8:      stringPtr("h"),
+		Field10: []byte{0x0a, 0x03, 't', 'a', 'g'},    // q8p{b:"tag"}
+		Attestation: []byte{0xde, 0xad},
+		S12:         stringPtr("l"), S13: stringPtr("m"),
+		Repeated14: [][]byte{{0x01}, {0x02, 0x03}},
+	}
+	got, err := message.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "0a01611201621a01632201642a01653201663a040801080242016852050a037461675a02dead62016c6a016d72010172020203"
+	if hex.EncodeToString(got) != want {
+		t.Errorf("full prerequisites = %x, want %s", got, want)
 	}
 }
 

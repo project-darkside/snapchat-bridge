@@ -207,38 +207,76 @@ func (message *K5U) Marshal() ([]byte, error) {
 
 // COFMetadata mirrors c3e, the client configuration-sync metadata sent as
 // password-request field 8. It is not a device credential.
+//
+// Recovered from xq60.a, which maps mr60 (LoginConfigs(cofSyncMetadata,
+// cofRoutingTag)) into c3e: field 1 = cofRoutingTag (mr60.a), field 2 =
+// cofSyncMetadata.etag (b3e.a), field 3 = the hardcoded 385 set by c3e.d(),
+// and field 4 = cofSyncMetadata.bitmap (b3e.b, a byte array).
 type COFMetadata struct {
-	ETag       *string // field 1
-	RoutingTag *string // field 2
-	Bitmap     *int32  // field 3
-	Bytes      []byte  // field 4
+	RoutingTag *string // field 1 (cofRoutingTag)
+	ETag       *string // field 2 (cofSyncMetadata.etag)
+	Version    *int32  // field 3, always 385
+	Bitmap     []byte  // field 4 (cofSyncMetadata.bitmap)
+}
+
+// COFMetadataVersion is the value c3e.d() writes to field 3. It is a fixed
+// constant in the APK, not a runtime bitmap.
+const COFMetadataVersion = 385
+
+// NewCOFMetadata assembles c3e exactly as xq60.a does: routing tag into field
+// 1, etag into field 2, the fixed 385 into field 3, and the bitmap into field
+// 4. Empty etag/routing-tag strings still set their presence bits, matching
+// the MessageNano setters.
+func NewCOFMetadata(routingTag, etag string, bitmap []byte) *COFMetadata {
+	version := int32(COFMetadataVersion)
+	return &COFMetadata{
+		RoutingTag: &routingTag,
+		ETag:       &etag,
+		Version:    &version,
+		Bitmap:     bitmap,
+	}
 }
 
 // Marshal serializes c3e in writeTo order.
 func (message *COFMetadata) Marshal() ([]byte, error) {
 	var wire []byte
-	if message.ETag != nil {
-		wire = protowire.AppendTag(wire, 1, protowire.BytesType)
-		wire = protowire.AppendString(wire, *message.ETag)
-	}
 	if message.RoutingTag != nil {
-		wire = protowire.AppendTag(wire, 2, protowire.BytesType)
+		wire = protowire.AppendTag(wire, 1, protowire.BytesType)
 		wire = protowire.AppendString(wire, *message.RoutingTag)
 	}
-	if message.Bitmap != nil {
-		wire = protowire.AppendTag(wire, 3, protowire.VarintType)
-		wire = protowire.AppendVarint(wire, uint64(*message.Bitmap))
+	if message.ETag != nil {
+		wire = protowire.AppendTag(wire, 2, protowire.BytesType)
+		wire = protowire.AppendString(wire, *message.ETag)
 	}
-	if len(message.Bytes) > 0 {
+	if message.Version != nil {
+		wire = protowire.AppendTag(wire, 3, protowire.VarintType)
+		wire = protowire.AppendVarint(wire, uint64(*message.Version))
+	}
+	if len(message.Bitmap) > 0 {
 		wire = protowire.AppendTag(wire, 4, protowire.BytesType)
-		wire = protowire.AppendBytes(wire, message.Bytes)
+		wire = protowire.AppendBytes(wire, message.Bitmap)
 	}
 	return wire, nil
 }
 
 // Prerequisites mirrors fs60, the request prerequisite message sent as
-// password-request field 15. Field 11 carries the native login attestation
-// output. Fields 7 and 10 are nested messages supplied pre-encoded.
+// password-request field 15. Field numbers and semantics were re-verified
+// against fs60.writeTo in the installed 14.29.0.50 build:
+//
+//	field 1  = device/app identifier (rod.b())
+//	field 2  = request metadata string 1 (nr60.a)
+//	field 3  = request metadata string 2 (nr60.b)
+//	field 4  = login attempt id (nr60.d)
+//	field 5  = request metadata string 3
+//	field 6  = instance uuid (su60.a)
+//	field 7  = wgg0: COF sequence/feature flags (su60.c), repeated int32
+//	field 8  = cloud account id (su60.e)
+//	field 10 = q8p: device token id (rxf0.j()), omitted when empty
+//	field 11 = client attestation blob (su60.d)
+//	field 14 = COF sequence ids (su60.b), repeated serialized messages
+//
+// Fields 7 and 10 are nested messages; encode them with Wgg0 and Q8P or use
+// NewLoginPrerequisites.
 type Prerequisites struct {
 	S1, S2, S3, S4, S5, S6 *string  // fields 1-6
 	Field7                 []byte   // field 7 (wgg0), pre-encoded
@@ -288,4 +326,74 @@ func (message *Prerequisites) Marshal() ([]byte, error) {
 		wire = protowire.AppendBytes(wire, value)
 	}
 	return wire, nil
+}
+
+// Wgg0 mirrors wgg0, the fs60 field 7 message carrying the COF
+// sequence/feature flags. writeTo emits each element unpacked as
+// writeInt32(1, value): repeated int32 field 1.
+type Wgg0 struct {
+	Flags []int32 // field 1, repeated int32
+}
+
+// Marshal serializes wgg0 in writeTo order.
+func (message *Wgg0) Marshal() ([]byte, error) {
+	var wire []byte
+	for _, flag := range message.Flags {
+		wire = protowire.AppendTag(wire, 1, protowire.VarintType)
+		wire = protowire.AppendVarint(wire, uint64(flag))
+	}
+	return wire, nil
+}
+
+// Q8P mirrors q8p, the fs60 field 10 message carrying the device token id.
+// writeTo emits writeString(1, value): string field 1.
+type Q8P struct {
+	Token *string // field 1
+}
+
+// Marshal serializes q8p in writeTo order. A nil token yields an empty
+// message, matching a q8p whose presence bit was never set.
+func (message *Q8P) Marshal() ([]byte, error) {
+	if message.Token == nil {
+		return []byte{}, nil
+	}
+	wire := protowire.AppendTag(nil, 1, protowire.BytesType)
+	return protowire.AppendString(wire, *message.Token), nil
+}
+
+// NewLoginPrerequisites assembles fs60 from the recovered login value sources.
+// deviceID is rod.b(); metadata1/2/3 are the three request metadata strings
+// (nr60.a, nr60.b, and the third string); loginAttemptID is nr60.d;
+// instanceUUID is su60.a; flags are the COF sequence/feature flags (wgg0 field
+// 1, omitted when empty); cloudAccountID is su60.e; deviceTokenID is rxf0.j()
+// (q8p field 1, omitted when empty); attestation is su60.d; sequenceIDs are
+// su60.b (serialized COF sequence messages, omitted when empty).
+func NewLoginPrerequisites(deviceID, metadata1, metadata2, metadata3, loginAttemptID, instanceUUID, cloudAccountID string, flags []int32, deviceTokenID string, attestation []byte, sequenceIDs [][]byte) (*Prerequisites, error) {
+	prereq := &Prerequisites{
+		S1:          &deviceID,
+		S2:          &metadata1,
+		S3:          &metadata2,
+		S4:          &loginAttemptID,
+		S5:          &metadata3,
+		S6:          &instanceUUID,
+		S8:          &cloudAccountID,
+		Attestation: attestation,
+		Repeated14:  sequenceIDs,
+	}
+	if len(flags) > 0 {
+		encoded, err := (&Wgg0{Flags: flags}).Marshal()
+		if err != nil {
+			return nil, err
+		}
+		prereq.Field7 = encoded
+	}
+	if deviceTokenID != "" {
+		token := deviceTokenID
+		encoded, err := (&Q8P{Token: &token}).Marshal()
+		if err != nil {
+			return nil, err
+		}
+		prereq.Field10 = encoded
+	}
+	return prereq, nil
 }
