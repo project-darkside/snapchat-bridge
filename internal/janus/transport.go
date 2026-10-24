@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -27,11 +29,17 @@ type TransportOptions struct {
 	// all connections are tunneled, e.g. "127.0.0.1:9150" for Tor. When empty,
 	// the client connects directly.
 	ProxyAddr string
+	// SurfaceServerErrors returns the raw gRPC status (including the server's
+	// message text) instead of the sanitized error. Enable only for explicit
+	// debugging against your own account; server messages may contain content
+	// that should not be logged.
+	SurfaceServerErrors bool
 }
 
 // Transport is a minimal gRPC client for the Janus LoginService.
 type Transport struct {
-	connection *grpc.ClientConn
+	connection          *grpc.ClientConn
+	surfaceServerErrors bool
 }
 
 // protoMessage adapts raw bytes to the grpc proto codec.
@@ -97,7 +105,7 @@ func NewTransportWithOptions(userAgent string, options TransportOptions) (*Trans
 	if err != nil {
 		return nil, errors.New("could not initialize Janus gRPC client")
 	}
-	return &Transport{connection: connection}, nil
+	return &Transport{connection: connection, surfaceServerErrors: options.SurfaceServerErrors}, nil
 }
 
 // Close releases the underlying connection.
@@ -122,7 +130,18 @@ func (transport *Transport) LoginWithPassword(ctx context.Context, request []byt
 	var response protoMessage
 	err := transport.connection.Invoke(ctx, LoginWithPasswordPath, &payload, &response, grpc.ForceCodec(protoCodec{}))
 	if err != nil {
-		return nil, status.Error(status.Code(err), "Janus password-login RPC failed")
+		code := status.Code(err)
+		if transport.surfaceServerErrors {
+			return nil, err
+		}
+		// Transport-level failures describe the client's own connection
+		// attempt (dial, proxy, TLS, timeout) and carry no server response
+		// content, so they are surfaced for diagnosis. Application-level
+		// statuses stay sanitized to avoid leaking server message contents.
+		if code == codes.Unavailable || code == codes.DeadlineExceeded || code == codes.Canceled {
+			return nil, fmt.Errorf("Janus password-login RPC %s: %w", code, err)
+		}
+		return nil, status.Error(code, "Janus password-login RPC failed")
 	}
 	return response, nil
 }

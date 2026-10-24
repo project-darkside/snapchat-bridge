@@ -84,6 +84,8 @@ func run(args []string) error {
 
 		proxy = flags.String("proxy", "127.0.0.1:9150", "SOCKS5 proxy address for all network calls (empty disables)")
 
+		showRPCError = flags.Bool("show-rpc-error", false, "surface the raw gRPC status (including server message) for diagnosis")
+
 		numAttempts    = flags.Int64("num-attempts", 0, "n070 field 5 (0 omits the field)")
 		passwordSource = flags.Int("password-source", 0, "n070 field 9 (0 omits the field)")
 		whatsapp       = flags.Bool("whatsapp", false, "n070 field 11")
@@ -129,7 +131,10 @@ func run(args []string) error {
 		return nil
 	}
 
-	transport, err := janus.NewTransportWithOptions(*userAgent, janus.TransportOptions{ProxyAddr: *proxy})
+	transport, err := janus.NewTransportWithOptions(*userAgent, janus.TransportOptions{
+		ProxyAddr:           *proxy,
+		SurfaceServerErrors: *showRPCError,
+	})
 	if err != nil {
 		return err
 	}
