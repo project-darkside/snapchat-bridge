@@ -67,15 +67,53 @@ now modeled and tested in [messages.go](internal/janus/messages.go) (`Wgg0`,
 `Q8P`, `NewLoginPrerequisites`) with
 [prerequisites_test.go](internal/janus/prerequisites_test.go).
 
+### Fidelius key wrap/unwrap (recovered 2026-10-24)
+
+- `r241.<init>(masterKey, privateDER, version, publicDER)` sets fields
+  `a`/`b`/`c`/`t`; `e()=a` (iwek/master key), `d()=b` (PKCS#8 private),
+  `f()=c` (SPKI public), `i()=t` (version). `r241.a()` = HMAC-SHA256(masterKey,
+  publicDER) — the "hashed public key" label. `r241.j()` serializes to the
+  `q700` message (fields h/i/j/k). `writeToParcel` writes only a/b/c/t.
+- `p241.a(Integer, String, String, String)` parses an r241 from 4 stored
+  strings (version + three `vh21.Y`-decoded byte[]s); returns null when any
+  string is empty.
+- `fs91.b(label, masterKey, ciphertext)` = UNWRAP (decrypt): AES key =
+  `HKDF(masterKey, salt="", info=label+"key")[0:16]` (AES-128), nonce =
+  `HKDF(masterKey, salt="", info=label+"nonce")[0:12]`, then
+  `r7i.a(key, nonce, ciphertext, 32, null)` (AES-GCM decrypt).
+- `fs91.c(label, masterKey, plaintext)` = WRAP (encrypt): same HKDF derivation,
+  then `r7i.b(...)` (AES-GCM encrypt). `fs91.a(masterKey, q0u)` = full load:
+  `fs91.b(label, masterKey, q0u.b)` → private scalar → EC key → `r241`.
+- `r7i.a` = decrypt, `r7i.b` = encrypt (AES-GCM via `kdw.d(bool, mvd0(...))`);
+  `r7i.d` = encrypt with a random 12-byte IV returning `iv||ciphertext`;
+  `r7i.c` = decrypt of that form. The int argument is the GCM tag size (32 in
+  the Fidelius path, 128 in the `r7i.c`/`r7i.d` path).
+
 ### Still unknown (literal runtime values)
 
 - `rod.b()` concrete implementation (device-identifier provider) — the one
   stable device-bound value left.
 - `cz60.b` / `cz60.d` (`nr60.a` / `nr60.b`) and `yv60.v` (`nr60.d`) — app
   private-data / DI-layer values.
+- `r241.m0` (`c()`, k5u field 2) and where the Provider fields `m0`/`n0`/`X`/`Z`
+  are set.
+- The fresh keygen path: who generates the keypair + master key and calls
+  `fs91.c` to store it. Resume at the `r241.<init>` callers
+  (`m5u.e(xqk0, String, byte[])`, `m5u.<init>`, `s3u.k(r241)` — likely sets the
+  `m0`/`n0`/`X`/`Z` providers — `oz4.call`, `r5u.a(String)`). HKDF MAC
+  (`k8o0`), `mvd0`/`ah20` GCM details, `vh21.Y`/`vh21.a0` encodings, and
+  `lbr.b` remain to be pinned down.
 - Fresh-login defaults for flags / cloud account / device token / sequence ids
   (expected empty or null on first login). The third metadata string and
   per-request ids are fresh UUIDs and can be generated client-side.
+
+### End-to-end result (2026-10-24)
+
+`TestEndToEndLogin` (opt-in, [e2e_login_test.go](internal/janus/e2e_login_test.go))
+mints a real 4227-byte attestation blob, assembles a 4576-byte `n070` request
+with best-guess placeholders, and sends it over Tor: Snapchat returns
+`InvalidArgument / invalidRequest` (generic). The harness and wire format are
+sound; the placeholder values above are what the validator rejects.
 
 ### Verified this session
 
