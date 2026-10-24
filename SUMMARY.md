@@ -119,3 +119,12 @@ The REA CLI's decompiled method text is in `.normalized_result.source.text`.
 Keep APKs, native blobs, credentials, device identifiers, and captures out of
 Git. Clean only the exact owned files in the dedicated phone probe directory
 when they are no longer needed.
+
+A diagnostic CLI for the recovered Janus password-login wire format now lives
+under [`cmd/snapchat-janus`](cmd/snapchat-janus) with the reusable encoder,
+transport, and response decoder in [`internal/janus`](internal/janus). It
+assembles the `n070` request from captured sub-messages, sends it to
+`aws.api.snapchat.com:443`, and decodes the `o070` envelope and success
+payload, so the login path can be iterated on without a Matrix server. It does
+not remove the Fidelius key-generation or native-attestation unknowns and must
+not be used with real credentials.
