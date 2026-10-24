@@ -13,6 +13,10 @@ Use this checkpoint and [current findings](docs/development/FINDINGS.md) instead
 of the completion percentages in the historical
 [handoff](docs/development/HANDOFF.md).
 
+The [REA login/session report](docs/development/PASSWORD_LOGIN_FLOW.md) explains
+the native attestation boundary, Fidelius initialization, challenge dispatch,
+and token persistence with method-level evidence and remaining unknowns.
+
 ## Completed Progress
 
 - Hardened legacy login response handling: reject failed HTTP responses,
@@ -53,8 +57,9 @@ of the completion percentages in the historical
 1. **Finish Fidelius key initialization.** Resume at `vo3.apply` case 28, which
    builds `a3u(v0u, r241)`. Recover fresh key generation, algorithms, encodings,
    and persistence requirements before choosing a crypto implementation.
-   `r241.f()` returns stored bytes; `mor0.d()` delegates to
-   `uh3.w1(26, 91, bytes)`, whose semantics still need verification.
+  `r241.f()` returns stored bytes; `mor0.d()` copies the end-exclusive range
+  `[26, 91)`, producing 65 bytes. The crypto algorithm and key encoding remain
+  unverified. `p241.b(byte[])` parses existing keys; it does not generate them.
    The inspected `oz4.call` branch processes successful-login key material; it
    does not establish how fresh login keys are generated.
 2. **Complete the request prerequisites.** Follow `xu60.a` and the `fs60`

@@ -8,6 +8,11 @@ In particular, neither the local HMAC signing scheme nor the legacy signing
 service has been validated against the supplied APK. Do not send real account
 credentials to that third-party service on the strength of the old notes.
 
+For a step-by-step explanation with REA commands, exact evidence records, and
+explicit unknowns, see the [password-login and session flow](PASSWORD_LOGIN_FLOW.md).
+That report expands the installed-build findings below, including the recovered
+user-agent format, Fidelius packaging, response dispatch, and session storage.
+
 ### Installed Android 14.29.0.50
 
 The connected Pixel 8 has **14.29.0.50**, not the supplied 14.30 Beta.
