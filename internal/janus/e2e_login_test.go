@@ -148,24 +148,20 @@ func mintAttestation(t *testing.T) ([]byte, error) {
 }
 
 func buildEndToEndRequest(username, password, androidID string, attestation []byte) (*PasswordRequest, error) {
-	idBytes, err := hex.DecodeString(androidID)
+	androidID9, err := AndroidIDBytes(androidID)
 	if err != nil {
-		return nil, fmt.Errorf("android id must be hex: %w", err)
+		return nil, err
 	}
-	if len(idBytes) != 8 {
-		return nil, fmt.Errorf("android id must decode to 8 bytes, got %d", len(idBytes))
-	}
-	androidID9 := append([]byte{0x07}, idBytes...)
 
 	seed := make([]byte, 32)
 	if _, err := rand.Read(seed); err != nil {
 		return nil, fmt.Errorf("generate fidelius seed: %w", err)
 	}
-	key, err := GenerateFideliusKey(seed, 1)
+	key, err := GenerateFideliusKey(seed, FideliusKeyVersion)
 	if err != nil {
 		return nil, fmt.Errorf("generate fidelius key: %w", err)
 	}
-	fidelius, err := NewFideliusInit(nil, androidID9, key.Public, nil, seed, 1)
+	fidelius, err := NewFideliusInitFromKey(key, androidID9)
 	if err != nil {
 		return nil, fmt.Errorf("fidelius init: %w", err)
 	}
@@ -179,6 +175,10 @@ func buildEndToEndRequest(username, password, androidID string, attestation []by
 		return nil, fmt.Errorf("marshal cof: %w", err)
 	}
 
+	deviceID, err := randomUUID()
+	if err != nil {
+		return nil, err
+	}
 	metadata3, err := randomUUID()
 	if err != nil {
 		return nil, err
@@ -192,7 +192,7 @@ func buildEndToEndRequest(username, password, androidID string, attestation []by
 		return nil, err
 	}
 	prerequisites, err := NewLoginPrerequisites(
-		androidID, // fs60 field 1: best-guess device identifier
+		deviceID,  // fs60 field 1: client id (rod.b() = yod.e(), daily client id)
 		"",        // fs60 field 2 (nr60.a / cz60.b)
 		"",        // fs60 field 3 (nr60.b / cz60.d)
 		metadata3, // fs60 field 5: per-request UUID

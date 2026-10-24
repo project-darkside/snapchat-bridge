@@ -89,23 +89,36 @@ now modeled and tested in [messages.go](internal/janus/messages.go) (`Wgg0`,
   `r7i.c` = decrypt of that form. The int argument is the GCM tag size (32 in
   the Fidelius path, 128 in the `r7i.c`/`r7i.d` path).
 
+### Fidelius key generation (recovered 2026-10-24)
+
+Fresh keygen is `r5u.a`: a 32-byte SecureRandom master key + a fresh P-256
+keypair, version 10 (9 only when a config flag is set), yielding
+`r241(masterKey, PKCS8 private, 10, SPKI public)`. `vo3.apply` case 28 then
+assembles `v0u`: field 1 = the hashed public key as the sole device user id,
+field 2 = `k5u` (point / hashed public key / master key / version), field 3 =
+the 9-byte Android ID. The hashed public key is `r241.a()` =
+HMAC-SHA256(masterKey, SPKI public DER) — it is `k5u` field 2 and the device
+user id. This is implemented and tested in
+[fidelius.go](internal/janus/fidelius.go) (`computeHashedPublicKey`,
+`AndroidIDBytes`, `NewFideliusInitFromKey`, `FideliusKeyVersion = 10`).
+
+The device identifier (`fs60` field 1, `rod.b()`) is the Snapchat daily client
+id: `rod` is implemented by `yod` (`ClientIdProviderV2Impl`, a fresh UUID) and
+`td60` (lock-screen-mode only), so a freshly generated UUID is the correct
+value for a fresh login.
+
 ### Still unknown (literal runtime values)
 
-- `rod.b()` concrete implementation (device-identifier provider) — the one
-  stable device-bound value left.
-- `cz60.b` / `cz60.d` (`nr60.a` / `nr60.b`) and `yv60.v` (`nr60.d`) — app
-  private-data / DI-layer values.
-- `r241.m0` (`c()`, k5u field 2) and where the Provider fields `m0`/`n0`/`X`/`Z`
-  are set.
-- The fresh keygen path: who generates the keypair + master key and calls
-  `fs91.c` to store it. Resume at the `r241.<init>` callers
-  (`m5u.e(xqk0, String, byte[])`, `m5u.<init>`, `s3u.k(r241)` — likely sets the
-  `m0`/`n0`/`X`/`Z` providers — `oz4.call`, `r5u.a(String)`). HKDF MAC
-  (`k8o0`), `mvd0`/`ah20` GCM details, `vh21.Y`/`vh21.a0` encodings, and
-  `lbr.b` remain to be pinned down.
-- Fresh-login defaults for flags / cloud account / device token / sequence ids
-  (expected empty or null on first login). The third metadata string and
-  per-request ids are fresh UUIDs and can be generated client-side.
+- `cz60.b` / `cz60.d` (`nr60.a` / `nr60.b`) and `yv60.v` (`nr60.d`) — the
+  login-config object fields populated at config-init time (deep `gz60.i()`
+  → `cz60` chain); likely app/device metadata strings.
+- `passwordSource` (n070 field 9) and `numAttempts` (field 5) values — the
+  wire map is verified (`n070.writeTo`), but the expected non-zero values for
+  a password login are not yet pinned down.
+- Fresh-login defaults for the COF sequence/feature flags (`wgg0`), cloud
+  account id, device token id, and sequence ids (expected empty or null on
+  first login). The third metadata string, login attempt id, instance uuid,
+  and client id are fresh UUIDs and are generated client-side.
 
 ### End-to-end result (2026-10-24)
 
