@@ -89,3 +89,6 @@ COMMIT_MESSAGE.md
 mitmproxy/
 
 apk/
+
+# Local credentials (never commit)
+pw.txt
