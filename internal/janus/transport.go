@@ -34,12 +34,17 @@ type TransportOptions struct {
 	// debugging against your own account; server messages may contain content
 	// that should not be logged.
 	SurfaceServerErrors bool
+	// RPCTimeout bounds a single LoginWithPassword call. Zero means 10s (the
+	// historical default). Cold Tor circuits can take longer than 10s to
+	// become ready, so callers behind a fresh SOCKS5 proxy may raise this.
+	RPCTimeout time.Duration
 }
 
 // Transport is a minimal gRPC client for the Janus LoginService.
 type Transport struct {
 	connection          *grpc.ClientConn
 	surfaceServerErrors bool
+	rpcTimeout          time.Duration
 }
 
 // protoMessage adapts raw bytes to the grpc proto codec.
@@ -105,7 +110,7 @@ func NewTransportWithOptions(userAgent string, options TransportOptions) (*Trans
 	if err != nil {
 		return nil, errors.New("could not initialize Janus gRPC client")
 	}
-	return &Transport{connection: connection, surfaceServerErrors: options.SurfaceServerErrors}, nil
+	return &Transport{connection: connection, surfaceServerErrors: options.SurfaceServerErrors, rpcTimeout: options.RPCTimeout}, nil
 }
 
 // Close releases the underlying connection.
@@ -120,7 +125,11 @@ func (transport *Transport) LoginWithPassword(ctx context.Context, request []byt
 	if len(request) == 0 {
 		return nil, errors.New("Janus password request is empty")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	rpcTimeout := transport.rpcTimeout
+	if rpcTimeout <= 0 {
+		rpcTimeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs(
 		"accept-language", "en-US",

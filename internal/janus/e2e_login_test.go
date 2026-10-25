@@ -68,14 +68,14 @@ func TestEndToEndLogin(t *testing.T) {
 	}
 	transport, err := NewTransportWithOptions(
 		"Snapchat/14.29.0.50 (JanusProbe; Android 14#0#34; gzip)",
-		TransportOptions{ProxyAddr: proxy, SurfaceServerErrors: true},
+		TransportOptions{ProxyAddr: proxy, SurfaceServerErrors: true, RPCTimeout: 60 * time.Second},
 	)
 	if err != nil {
 		t.Fatalf("transport: %v", err)
 	}
 	defer transport.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	response, err := transport.LoginWithPassword(ctx, encoded)
@@ -212,12 +212,23 @@ func buildEndToEndRequest(username, password, androidID string, attestation []by
 		return nil, fmt.Errorf("marshal prerequisites: %w", err)
 	}
 
+	// Recovered from the blg0 constructor in nn.apply (smali, installed
+	// 14.29.0.50): n070 field 9 (password source) = 256 (const/16 v24, 0x100),
+	// field 11 (WhatsApp) = cz60.o0 (false for password login), and field 5
+	// (attempts) is the per-attempt counter (1 on first try).
+	numAttempts := int64(1)
+	passwordSource := int32(256)
+	whatsapp := false
+
 	return &PasswordRequest{
 		Identifier:     username,
 		IdentifierKind: Username,
 		Password:       password,
+		NumAttempts:    &numAttempts,
 		FideliusInit:   fideliusBytes,
 		COFMetadata:    cofBytes,
+		PasswordSource: &passwordSource,
+		WhatsApp:       &whatsapp,
 		Prerequisites:  prerequisitesBytes,
 	}, nil
 }

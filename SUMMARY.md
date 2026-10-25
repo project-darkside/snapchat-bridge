@@ -109,16 +109,29 @@ value for a fresh login.
 
 ### Still unknown (literal runtime values)
 
-- `cz60.b` / `cz60.d` (`nr60.a` / `nr60.b`) and `yv60.v` (`nr60.d`) — the
-  login-config object fields populated at config-init time (deep `gz60.i()`
-  → `cz60` chain); likely app/device metadata strings.
-- `passwordSource` (n070 field 9) and `numAttempts` (field 5) values — the
-  wire map is verified (`n070.writeTo`), but the expected non-zero values for
-  a password login are not yet pinned down.
+- `nr60.d` (fs60 field 4, login attempt id) = `yv60.v`, falling back to
+  `BuildConfig.APPLIVERY_SECRET` when null. `yv60.v` is runtime
+  login-challenge state, and `APPLIVERY_SECRET` is not a compile-time
+  constant (the `com.snap.buildconfig.BuildConfig` field is kept but has no
+  `<clinit>`), so neither is statically recoverable.
 - Fresh-login defaults for the COF sequence/feature flags (`wgg0`), cloud
   account id, device token id, and sequence ids (expected empty or null on
   first login). The third metadata string, login attempt id, instance uuid,
   and client id are fresh UUIDs and are generated client-side.
+
+### Recovered 2026-10-24: n070 scalar fields and COF defaults
+
+- The password-input DTO is `blg0`; `nn.apply` constructs it (smali) with
+  `const/16 v24, 0x100` → **n070 field 9 (password source) = 256**, field 11
+  (WhatsApp) = `cz60.o0`, field 5 (attempts) = the per-attempt counter (1 on
+  first try), field 4 (password) = the credential. This is now encoded in
+  [e2e_login_test.go](internal/janus/e2e_login_test.go).
+- `ew00.<init>` builds the default `cz60` with **all fields null/0** — so
+  `cz60.b`/`cz60.d` (fs60 fields 2/3, i.e. `nr60.a`/`nr60.b`) are empty on a
+  fresh login, matching what the E2E probe already sends.
+- `rod.b()` (fs60 field 1) is the daily client id (`yod.e()`, a fresh UUID).
+- The E2E now reaches the server over Tor with all recovered values and still
+  returns `InvalidArgument / invalidRequest` (generic, no field detail).
 
 ### End-to-end result (2026-10-24)
 
