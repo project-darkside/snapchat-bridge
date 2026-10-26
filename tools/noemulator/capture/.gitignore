@@ -1,0 +1,4 @@
+# Captured request bodies and hook output. These contain the test
+# credentials (username/password) and device-specific attestation blobs, so
+# they must never be committed.
+captures/
