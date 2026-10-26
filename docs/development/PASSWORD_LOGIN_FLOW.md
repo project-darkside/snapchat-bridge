@@ -75,15 +75,35 @@ The `n070.writeTo` serializer establishes these field numbers:
 | 11 | WhatsApp-related boolean |
 | 15 | `fs60` request prerequisites |
 
-Only synthetic identifier/password fixtures have been round-tripped through the
-original APK and matched by the [Go encoder](../../janus.go). Matching those
-minimal bytes does not establish that the remaining fields can be omitted.
+**Live-capture validation (14.29.0.50, NoEmulator VM):** a Frida hook on
+`UnifiedGrpcService.unaryCall` captured the full `LoginWithPassword` request
+(5987 bytes). Feeding the captured field values back through
+`PasswordRequest.Marshal` reproduced the request **byte-for-byte** (5987/5987),
+so the Go n070 encoder is byte-identical to the APK's. The live request also
+confirmed the transport: the request reaches
+`/snapchat.janus.api.LoginService/LoginWithPassword` as a gRPC unary call whose
+body is a `java.nio.ByteBuffer`.
+
+Remaining divergence from the real app is entirely in runtime *inputs*, not the
+wire encoding:
+
+- `c3e` field 2 (`etag`): the VM app sends its synced COF etag; a fresh bridge
+  client legitimately sends empty.
+- `fs60` field 7 (`wgg0`): the VM app sends 104 COF capability gate IDs. The
+  bridge sends none; the nil-flag request still reaches the server's
+  account-level check, so the list appears optional.
+- `fs60` fields 1-6 and `v0u` field 2: per-request UUIDs and the Fidelius seed,
+  regenerated on every attempt.
+- `n070` field 9 (`PasswordSource`): **1** for a manually typed password. The
+  earlier static recovery of 256 (`const/16 v24, 0x100`) was superseded by the
+  capture; the Go harness now sends 1.
 
 Field 8 is not an additional password or device credential: `mr60.toString`
 labels its inputs `LoginConfigs(cofSyncMetadata, cofRoutingTag)`, while
 `b3e.toString` labels the sync metadata `etag` and `bitmap`. The setters in
-`xq60.a` map that wrapper into `c3e`; the exact setter encodings still require
-verification before extending the Go implementation.
+`xq60.a` map that wrapper into `c3e`; the Go `COFMetadata` encoder reproduces
+this layout (fields 1/2/3/4, version fixed at 385) and was confirmed
+byte-identical by the live-capture roundtrip.
 
 ### Transport Metadata
 
