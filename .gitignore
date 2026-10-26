@@ -92,3 +92,6 @@ apk/
 
 # Local credentials (never commit)
 pw.txt
+# Python
+__pycache__/
+*.pyc
