@@ -212,12 +212,13 @@ func buildEndToEndRequest(username, password, androidID string, attestation []by
 		return nil, fmt.Errorf("marshal prerequisites: %w", err)
 	}
 
-	// Recovered from the blg0 constructor in nn.apply (smali, installed
-	// 14.29.0.50): n070 field 9 (password source) = 256 (const/16 v24, 0x100),
-	// field 11 (WhatsApp) = cz60.o0 (false for password login), and field 5
-	// (attempts) is the per-attempt counter (1 on first try).
+	// Live Frida capture of the 14.29.0.50 password-login request
+	// (LoginWithPassword, NoEmulator VM): n070 field 9 (password source) = 1
+	// for a manually typed password, field 11 (WhatsApp) = false, and field 5
+	// (attempts) = 1 on the first try. The earlier static recovery of 256
+	// (const/16 v24, 0x100) in blg0 was superseded by the capture.
 	numAttempts := int64(1)
-	passwordSource := int32(256)
+	passwordSource := int32(1)
 	whatsapp := false
 
 	return &PasswordRequest{
